@@ -7,6 +7,7 @@
 > **Discernible fork:** Podman + IdentyClaw Passport operator scripts live in
 > [`deploy/`](./deploy/README.md). Runtime state stays in the sibling
 > `~/hermes-agent-app/` directory (`./deploy/hermes.sh init`).
+> Passport enrollment steps are below — see also [discernible.io](https://www.discernible.io/).
 
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
@@ -34,6 +35,87 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), OpenR
 <tr><td><b>Runs anywhere, not just your laptop</b></td><td>Seven terminal backends — local, Docker, SSH, Singularity, Modal, Daytona, and Vercel Sandbox. Daytona and Modal offer serverless persistence — your agent's environment hibernates when idle and wakes on demand, costing nearly nothing between sessions. Run it on a $5 VPS or a GPU cluster.</td></tr>
 <tr><td><b>Research-ready</b></td><td>Batch trajectory generation, trajectory compression for training the next generation of tool-calling models.</td></tr>
 </table>
+
+---
+
+## IdentyClaw Passport (Discernible)
+
+This fork wires Hermes to [IdentyClaw](https://www.discernible.io/) — portable, cryptographically verifiable agent identity on NEAR (RODiT / HOLA). You mint a Passport once; peers resolve you by a stable 12-letter `tokenId` across hosts and redeploys. Overview and Hermes path: [discernible.io](https://www.discernible.io/) · enrollment API: [guide:enrollment](https://api.identyclaw.com/.well-known/enrollment) · purchase: [purchase.identyclaw.com](https://purchase.identyclaw.com).
+
+Checkout is a **human** step. Keep NEAR private keys on disk only — never paste them into chat.
+
+### 1. Install this repo (Podman)
+
+Requires rootless [Podman](https://podman.io/). Full operator reference: [`deploy/README.md`](./deploy/README.md).
+
+```bash
+git clone https://github.com/discernible-io/hermes-agent.git ~/hermes-agent
+cd ~/hermes-agent/deploy
+chmod +x hermes.sh
+./hermes.sh init          # creates ~/hermes-agent-app + env.local, pulls image
+./hermes.sh setup         # interactive wizard (finish before start)
+./hermes.sh start         # detached gateway
+./hermes.sh idcp-install  # IdentyClaw helper CLI + skill into the app dir
+```
+
+Runtime state lives in `~/hermes-agent-app/` (override with `HERMES_APP_DIR`).
+
+### 2. Create a NEAR implicit account
+
+Hermes uses the host-login path (`idcp`), not OpenClaw plugins. Enrollment writes credentials under `~/hermes-agent-app/secrets/near-credentials/`.
+
+```bash
+./hermes.sh idcp enroll
+```
+
+That runs [gennearaccount](https://github.com/discernible-io/gennearaccount) when available (or a compatible fallback) and prints a **64-character hex** `implicit_account_id`. Save that id — it is the Passport recipient. Back up the JSON key file (`chmod 0600`); do not commit it.
+
+Optional standalone install of `gennearaccount` (if you prefer the CLI on the host): see [gennearaccount releases](https://github.com/discernible-io/gennearaccount/releases) or build from source.
+
+### 3. Get NEAR (HOT Wallet buy or swap)
+
+Minting costs NEAR on mainnet (gas + Passport fee). [guide:enrollment](https://api.identyclaw.com/api/mcp/resource/guide:enrollment) expects a funded checkout wallet. A practical path is **[HOT Wallet](https://hot-labs.org/telegram/)** (Telegram mini-app / browser extension — NEAR-native, built-in swap):
+
+1. Open [HOT Wallet](https://hot-labs.org/telegram/) in Telegram (or install the browser extension).
+2. Create or import a wallet you control. This is your **paying** wallet for checkout — separate from the agent's implicit account key file.
+3. Obtain NEAR:
+   - Buy NEAR in-app if available in your region, **or**
+   - Deposit another supported asset and **swap** it to NEAR inside HOT Wallet, **or**
+   - Withdraw NEAR from an exchange (Binance, Coinbase, Kraken, OKX, …) into HOT.
+4. Keep enough NEAR for the tier you want plus a small buffer for gas. Personal tier starts around **~0.066 Ⓝ** for short longevity; Collectible / Enterprise are higher — live quotes are on the purchase portal.
+
+You can also fund or swap via other NEAR wallets / DEX (e.g. Ref Finance). What matters at mint time is: a wallet with NEAR that can connect to the purchase portal, and the agent's `implicit_account_id` as the Passport recipient.
+
+### 4. Craft the Passport at purchase.identyclaw.com
+
+1. Open **[https://purchase.identyclaw.com](https://purchase.identyclaw.com)**.
+2. Fill the Passport form (name, creature/role, ContactURI, traits, longevity, optional webhook/avatar — see the [enrollment guide](https://api.identyclaw.com/api/mcp/resource/doc:reference:enrollment)).
+3. Paste the agent's **64-char hex** `implicit_account_id` as the NEAR account that will **receive** the Passport (implicit hex account, not a named `.near` account).
+4. **Connect NEAR Wallet** — choose HOT Wallet (or another Wallet Selector option) and approve the mint transaction with the funded wallet from step 3.
+5. Wait for confirmation (~seconds). The Passport is minted on-chain to that implicit account.
+
+Pricing tiers and fields change over time; trust the portal for current fees.
+
+### 5. Activate on Hermes
+
+```bash
+./hermes.sh idcp ensure_session   # JWT login (cached under secrets/identyclaw/)
+./hermes.sh idcp me               # confirm Passport identity / tokenId
+./hermes.sh start                 # recreate gateway with /opt/idcp mount if needed
+```
+
+Day-to-day: `idcp create_hola` / `idcp verify_hola` / `idcp request …`. Optional docs MCP:
+
+```bash
+./hermes.sh exec -- hermes mcp add IdentyClawDocs --url https://api.identyclaw.com/mcp
+```
+
+| Path | Role |
+|------|------|
+| `~/hermes-agent/deploy/` | Podman scripts + `idcp/` |
+| `~/hermes-agent-app/secrets/near-credentials/` | NEAR key JSON |
+| `~/hermes-agent-app/secrets/identyclaw/` | JWT cache |
+| `~/hermes-agent-app/skills/identity/identyclaw/` | Agent skill |
 
 ---
 
