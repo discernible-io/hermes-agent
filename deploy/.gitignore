@@ -1,0 +1,33 @@
+# Hermes agents deploy wrapper — code only. Runtime config/state live in ../hermes-agent-app/.
+
+# --- Secrets / local env (never commit) ---
+env.local
+.env
+.env.*
+!.env.example
+
+# --- Accidental state inside the checkout ---
+**/secrets/
+**/sessions/
+**/memories/
+**/logs/
+config.yaml
+config.yaml.bak*
+
+# --- Node (idcp deps — run ./hermes.sh idcp-install per host) ---
+idcp/node_modules/
+idcp/vendor/hola-client/node_modules/
+
+# --- Logs & scratch ---
+*.log
+tmp/
+.temp/
+.cache/
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+.cursor/
+.vscode/
+*.swp
+*~
