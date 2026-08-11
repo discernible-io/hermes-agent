@@ -3,6 +3,11 @@
 </p>
 
 # Hermes Agent ☤
+
+> **Discernible fork:** Podman + IdentyClaw Passport operator scripts live in
+> [`deploy/`](./deploy/README.md). Runtime state stays in the sibling
+> `~/hermes-agent-app/` directory (`./deploy/hermes.sh init`).
+
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
 </p>

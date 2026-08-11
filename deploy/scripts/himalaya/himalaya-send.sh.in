@@ -1,0 +1,15 @@
+#!/bin/sh
+# Headless outbound mail via Himalaya (no $EDITOR).
+# Usage: sh scripts/himalaya-send.sh TO SUBJECT [BODY]
+set -eu
+TO="${1:?usage: himalaya-send.sh TO SUBJECT [BODY]}"
+SUBJECT="${2:?usage: himalaya-send.sh TO SUBJECT [BODY]}"
+BODY="${3:-}"
+
+himalaya message send <<MAIL
+From: __DISPLAY_NAME__ <__EMAIL__>
+To: ${TO}
+Subject: ${SUBJECT}
+
+${BODY}
+MAIL
