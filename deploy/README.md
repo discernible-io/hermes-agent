@@ -67,11 +67,11 @@ This wrapper can expose it behind an **nginx TLS sidecar** in a dedicated Podman
 
 Auth is Hermes **HMAC** (not IdentyClaw RODiT). nginx only terminates TLS and proxies `/webhooks/`.
 
-Host publish ports use the **11xxx** range so they do not collide with OpenClaw (7443/9443):
+Host publish: Telegram webhook on **8443** (Telegram Bot API only accepts inbound webhooks on 443, 80, 88, or 8443). Operator API stays on 11642.
 
 | Host port | Maps to | Use |
 |-----------|---------|-----|
-| `11443` | nginx listen | HTTPS webhooks / health |
+| `8443` | container `8443` (standalone) or nginx TLS (pod) | Telegram webhook (`/telegram`) |
 | `11642` | container `8642` | Operator API |
 | `11919` | container `9119` | Dashboard (optional) |
 
@@ -79,15 +79,18 @@ Host publish ports use the **11xxx** range so they do not collide with OpenClaw 
 # in hermes-agent-app/env.local
 HERMES_DEPLOY_MODE=pod
 HERMES_PUBLIC_HOST=hermes.example.com
-HERMES_INGRESS_PORT=11443
+HERMES_INGRESS_PORT=8443
 HERMES_API_PORT=11642
+TELEGRAM_WEBHOOK_URL=https://hermes.example.com:8443/telegram
+TELEGRAM_WEBHOOK_SECRET=long-random-secret
 WEBHOOK_SECRET=long-random-secret
 
 ./hermes.sh generate-certs
 ./hermes.sh build-nginx
 ./hermes.sh start
 curl -k "https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT}/health"
-# Point GitHub/etc at https://hermes.example.com:11443/webhooks/<route>
+# Point GitHub/etc at https://hermes.example.com:8443/webhooks/<route>
+# Telegram: TELEGRAM_WEBHOOK_URL=https://hermes.example.com:8443/telegram
 # Manage routes: ./hermes.sh exec -- hermes webhook subscribe …
 ```
 

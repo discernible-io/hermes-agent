@@ -16,12 +16,14 @@ map $uri $hermes_health_limit_key {
 map $uri $hermes_ingress_limit_key {
     default "";
     "~^/webhooks(?:/|$)" $binary_remote_addr;
+    "~^/telegram(?:/|$)" $binary_remote_addr;
 }
 
 map $uri $hermes_public_limit_key {
     default $binary_remote_addr;
     "~^/health$" "";
     "~^/webhooks(?:/|$)" "";
+    "~^/telegram(?:/|$)" "";
 }
 
 limit_req_zone $hermes_health_limit_key zone=hermes_health:10m rate=30r/m;

@@ -77,7 +77,11 @@ hermes_gateway_run_args() {
     HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD \
     HERMES_DASHBOARD_BASIC_AUTH_SECRET HERMES_DASHBOARD_INSECURE \
     HERMES_DOCKER_BINARY IDENTYCLAW_BASE_URL \
-    WEBHOOK_ENABLED WEBHOOK_PORT WEBHOOK_SECRET
+    WEBHOOK_ENABLED WEBHOOK_PORT WEBHOOK_SECRET \
+    TELEGRAM_BOT_TOKEN TELEGRAM_ALLOWED_USERS TELEGRAM_HOME_CHANNEL \
+    TELEGRAM_HOME_CHANNEL_NAME TELEGRAM_PROXY \
+    TELEGRAM_WEBHOOK_URL TELEGRAM_WEBHOOK_PORT TELEGRAM_WEBHOOK_SECRET \
+    TELEGRAM_WEBHOOK_HOST GATEWAY_ALLOW_ALL_USERS
   do
     if [[ -n "${!key:-}" ]]; then
       _out+=(-e "${key}=${!key}")
@@ -95,6 +99,8 @@ cmd_start_standalone() {
   fi
   hermes_gateway_run_args args
   args+=(-p "${HERMES_API_PORT}:8642")
+  # Telegram Bot API inbound webhooks: 443, 80, 88, or 8443 only.
+  args+=(-p "${HERMES_TELEGRAM_PORT}:${TELEGRAM_WEBHOOK_PORT:-8443}")
   if [[ -n "${HERMES_DASHBOARD_PORT:-}" ]]; then
     args+=(-p "${HERMES_DASHBOARD_PORT}:9119")
   elif [[ "${HERMES_DASHBOARD:-}" == "1" || "${HERMES_DASHBOARD:-}" == "true" ]]; then
@@ -103,7 +109,7 @@ cmd_start_standalone() {
   args+=("$HERMES_IMAGE" gateway run)
 
   podman "${args[@]}"
-  echo "Started ${HERMES_CONTAINER} (standalone, restart=always) — API port ${HERMES_API_PORT}"
+  echo "Started ${HERMES_CONTAINER} (standalone, restart=always) — API ${HERMES_API_PORT}, Telegram webhook ${HERMES_TELEGRAM_PORT}"
 }
 
 cmd_start_pod() {
@@ -123,6 +129,12 @@ cmd_start_pod() {
   fi
 
   stop_hermes_pod_stack
+
+  # nginx owns HERMES_INGRESS_PORT (8443 for Telegram). Adapter must listen elsewhere.
+  if [[ "${TELEGRAM_WEBHOOK_PORT}" == "${HERMES_INGRESS_PORT}" ]]; then
+    export TELEGRAM_WEBHOOK_PORT=8643
+    echo "Note: TELEGRAM_WEBHOOK_PORT set to 8643 (nginx listens on ${HERMES_INGRESS_PORT})" >&2
+  fi
 
   echo "Creating pod ${HERMES_POD} (ingress ${HERMES_INGRESS_PORT}, API ${HERMES_API_PORT}) ..."
   podman pod create \
@@ -155,6 +167,7 @@ cmd_start_pod() {
   echo "  API:      http://127.0.0.1:${HERMES_API_PORT}"
   echo "  Ingress:  https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT}/health"
   echo "  Webhooks: https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT}/webhooks/<route>"
+  echo "  Telegram: https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT}/telegram"
 }
 
 cmd_start() {
@@ -332,12 +345,15 @@ cmd_status() {
     echo "Pod:     ${HERMES_POD:-hermes-agent-pod}"
     echo "Nginx:   ${HERMES_NGINX_IMAGE:-}"
     if [[ -n "${HERMES_PUBLIC_HOST:-}" ]]; then
-      echo "Ingress: https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-11443}/health"
-      echo "Webhook: https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-11443}/webhooks/<route>"
+      echo "Ingress:  https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-8443}/health"
+      echo "Webhook:  https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-8443}/webhooks/<route>"
+      echo "Telegram: https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-8443}/telegram"
     fi
     podman ps -a --filter "pod=${HERMES_POD:-hermes-agent-pod}" \
       --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}' || true
   else
+    echo "API:      http://127.0.0.1:${HERMES_API_PORT}"
+    echo "Telegram: host ${HERMES_TELEGRAM_PORT} → container ${TELEGRAM_WEBHOOK_PORT} (Bot API allows 443/80/88/8443)"
     podman ps -a --filter "name=^${HERMES_CONTAINER:-hermes}$" \
       --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}'
   fi
