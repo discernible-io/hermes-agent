@@ -67,11 +67,11 @@ This wrapper can expose it behind an **nginx TLS sidecar** in a dedicated Podman
 
 Auth is Hermes **HMAC** (not IdentyClaw RODiT). nginx only terminates TLS and proxies `/webhooks/`.
 
-Host publish: Telegram webhook on **88** (Telegram Bot API only accepts inbound webhooks on 443, 80, 88, or 8443). Operator API stays on 11642.
+Host publish: Telegram webhook on **80** (Telegram Bot API only accepts inbound webhooks on 443, 80, 88, or 8443). Operator API stays on 11642.
 
 | Host port | Maps to | Use |
 |-----------|---------|-----|
-| `88` | container `8443` (standalone) or nginx TLS (pod) | Telegram webhook (`/telegram`) |
+| `80` | container `8443` (standalone) or nginx TLS (pod) | Telegram webhook (`/telegram`) |
 | `11642` | container `8642` | Operator API |
 | `11919` | container `9119` | Dashboard (optional) |
 
@@ -79,9 +79,9 @@ Host publish: Telegram webhook on **88** (Telegram Bot API only accepts inbound 
 # in hermes-agent-app/env.local
 HERMES_DEPLOY_MODE=pod
 HERMES_PUBLIC_HOST=hermes.example.com
-HERMES_INGRESS_PORT=88
+HERMES_INGRESS_PORT=80
 HERMES_API_PORT=11642
-TELEGRAM_WEBHOOK_URL=https://hermes.example.com:88/telegram
+TELEGRAM_WEBHOOK_URL=https://hermes.example.com:80/telegram
 TELEGRAM_WEBHOOK_SECRET=long-random-secret
 WEBHOOK_SECRET=long-random-secret
 
@@ -89,8 +89,8 @@ WEBHOOK_SECRET=long-random-secret
 ./hermes.sh build-nginx
 ./hermes.sh start
 curl -k "https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT}/health"
-# Point GitHub/etc at https://hermes.example.com:88/webhooks/<route>
-# Telegram: TELEGRAM_WEBHOOK_URL=https://hermes.example.com:88/telegram
+# Point GitHub/etc at https://hermes.example.com:80/webhooks/<route>
+# Telegram: TELEGRAM_WEBHOOK_URL=https://hermes.example.com:80/telegram
 # Manage routes: ./hermes.sh exec -- hermes webhook subscribe …
 ```
 
