@@ -62,17 +62,18 @@ load_env() {
   fi
   HERMES_IMAGE="${HERMES_IMAGE:-docker.io/nousresearch/hermes-agent:latest}"
   HERMES_CONTAINER="${HERMES_CONTAINER:-hermes}"
-  # Operator API stays on 11642. Host 80 is reserved for Telegram webhooks —
+  # Operator API stays on 11642. Host Telegram/webhook publish defaults to 8443 —
   # Bot API only accepts inbound webhooks on 443, 80, 88, or 8443.
+  # Override via env.local when 8443 is taken (e.g. 10443 on this host).
   # Container-internal Hermes ports stay 8642 / 8644 / 9119.
   HERMES_API_PORT="${HERMES_API_PORT:-11642}"
-  HERMES_TELEGRAM_PORT="${HERMES_TELEGRAM_PORT:-80}"
+  HERMES_TELEGRAM_PORT="${HERMES_TELEGRAM_PORT:-8443}"
   TELEGRAM_WEBHOOK_PORT="${TELEGRAM_WEBHOOK_PORT:-8443}"
   HERMES_DEPLOY_MODE="${HERMES_DEPLOY_MODE:-standalone}"
   HERMES_POD="${HERMES_POD:-hermes-agent-pod}"
   HERMES_NGINX_CONTAINER="${HERMES_NGINX_CONTAINER:-hermes-nginx}"
   HERMES_NGINX_IMAGE="${HERMES_NGINX_IMAGE:-localhost/hermes-nginx:local}"
-  HERMES_INGRESS_PORT="${HERMES_INGRESS_PORT:-80}"
+  HERMES_INGRESS_PORT="${HERMES_INGRESS_PORT:-8443}"
   WEBHOOK_PORT="${WEBHOOK_PORT:-8644}"
 }
 
@@ -799,7 +800,7 @@ ensure_pod_logs_for_container() {
 build_hermes_nginx_image() {
   local ingress
   load_env
-  ingress="${HERMES_INGRESS_PORT:-80}"
+  ingress="${HERMES_INGRESS_PORT:-8443}"
   echo "Building ${HERMES_NGINX_IMAGE} (INGRESS_PORT=${ingress}) ..."
   podman build \
     -f "${HERMES_ROOT}/nginx.Dockerfile" \
