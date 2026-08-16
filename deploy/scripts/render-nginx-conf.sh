@@ -3,7 +3,7 @@
 # Usage: render-nginx-conf.sh <output-path>
 # Env (from env.local via caller):
 #   HERMES_PUBLIC_HOST   required
-#   HERMES_INGRESS_PORT  default 8443 (Telegram Bot API allowed webhook port)
+#   HERMES_INGRESS_PORT  default 88 (Telegram Bot API allowed webhook port)
 #   WEBHOOK_PORT         Hermes HMAC webhook adapter (default 8644, pod-local)
 #   TELEGRAM_WEBHOOK_PORT  Telegram adapter listen (default 8643 in pod mode)
 set -euo pipefail
@@ -21,7 +21,7 @@ host="${HERMES_PUBLIC_HOST:-}"
   echo "HERMES_PUBLIC_HOST is required to render nginx.conf" >&2
   exit 1
 }
-ingress_port="${HERMES_INGRESS_PORT:-8443}"
+ingress_port="${HERMES_INGRESS_PORT:-88}"
 webhook_port="${WEBHOOK_PORT:-8644}"
 telegram_port="${TELEGRAM_WEBHOOK_PORT:-8643}"
 
@@ -32,7 +32,7 @@ cat >"$out" <<EOF
 #   Webhooks: POST /webhooks/<route> (HMAC via Hermes WEBHOOK_SECRET)
 #   Telegram: POST /telegram (TELEGRAM_WEBHOOK_SECRET)
 # nginx terminates TLS and reverse-proxies webhook paths only.
-# Ingress listens on 8443 — Telegram Bot API only accepts 443, 80, 88, 8443.
+# Ingress listens on 88 — Telegram Bot API only accepts 443, 80, 88, 8443.
 # Operator API stays on host HERMES_API_PORT (default 11642 → container :8642).
 user nginx;
 worker_processes auto;

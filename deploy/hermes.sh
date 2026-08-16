@@ -130,7 +130,7 @@ cmd_start_pod() {
 
   stop_hermes_pod_stack
 
-  # nginx owns HERMES_INGRESS_PORT (8443 for Telegram). Adapter must listen elsewhere.
+  # nginx owns HERMES_INGRESS_PORT (88 for Telegram). Adapter must listen elsewhere.
   if [[ "${TELEGRAM_WEBHOOK_PORT}" == "${HERMES_INGRESS_PORT}" ]]; then
     export TELEGRAM_WEBHOOK_PORT=8643
     echo "Note: TELEGRAM_WEBHOOK_PORT set to 8643 (nginx listens on ${HERMES_INGRESS_PORT})" >&2
@@ -345,9 +345,9 @@ cmd_status() {
     echo "Pod:     ${HERMES_POD:-hermes-agent-pod}"
     echo "Nginx:   ${HERMES_NGINX_IMAGE:-}"
     if [[ -n "${HERMES_PUBLIC_HOST:-}" ]]; then
-      echo "Ingress:  https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-8443}/health"
-      echo "Webhook:  https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-8443}/webhooks/<route>"
-      echo "Telegram: https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-8443}/telegram"
+      echo "Ingress:  https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-88}/health"
+      echo "Webhook:  https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-88}/webhooks/<route>"
+      echo "Telegram: https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT:-88}/telegram"
     fi
     podman ps -a --filter "pod=${HERMES_POD:-hermes-agent-pod}" \
       --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}' || true
