@@ -64,7 +64,7 @@ load_env() {
   HERMES_CONTAINER="${HERMES_CONTAINER:-hermes}"
   # Operator API stays on 11642. Host Telegram/webhook publish defaults to 8443 —
   # Bot API only accepts inbound webhooks on 443, 80, 88, or 8443.
-  # Override via env.local when 8443 is taken (e.g. 10443 on this host).
+  # Override via env.local when 8443 is taken (this host: 10443, infra-app 80→10443).
   # Container-internal Hermes ports stay 8642 / 8644 / 9119.
   HERMES_API_PORT="${HERMES_API_PORT:-11642}"
   HERMES_TELEGRAM_PORT="${HERMES_TELEGRAM_PORT:-8443}"
