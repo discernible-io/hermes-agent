@@ -102,7 +102,13 @@ prepare_app_for_container() {
       kanban.db.init.lock kanban.db.dispatch.lock \
       kanban.db-wal kanban.db-shm 2>/dev/null || true
     # Directory + contents must be hermes (10000), not host-root-mapped UID 0.
-    chown -R 10000:10000 .
+    # Exclude certs/ — nginx (UID 101) needs ownership; normalize_tls_certs handles it.
+    chown 10000:10000 . 2>/dev/null || true
+    for item in * .[!.]* ..?*; do
+      [ -e \"\$item\" ] || continue
+      [ \"\$item\" = 'certs' ] && continue
+      chown -R 10000:10000 \"\$item\" 2>/dev/null || true
+    done
   "; then
     echo "Warning: could not chown $(hermes_app_dir) to hermes UID 10000" >&2
     return 1

@@ -185,6 +185,7 @@ cmd_start() {
     ensure_tls_certs
     ensure_hermes_nginx_conf
     ensure_webhook_config_seed || true
+    normalize_tls_certs
   fi
 
   prepare_app_for_container
