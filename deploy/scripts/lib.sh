@@ -286,7 +286,7 @@ ensure_sandbox_volumes() {
     -e "PATH=${app}/bin:/opt/data/bin:/opt/hermes/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     -e "HERMES_APP_HOST=${app}" \
     -e "HERMES_IDCP_HOST=${idcp_host}" \
-    -e "MIGADU_SMTP_IPV4=${MIGADU_SMTP_IPV4:-37.59.57.117}" \
+    -e "MIGADU_SMTP_IPV4=${MIGADU_SMTP_IPV4:-141.94.97.118}" \
     "$name" \
     /opt/hermes/.venv/bin/python3 - <<'PY' || echo "Warning: could not set terminal.docker_volumes" >&2
 import json, os, pathlib, re
@@ -345,7 +345,8 @@ elif not wrote_vols:
 cfg_path.write_text("".join(out))
 
 # Pin Migadu SMTP to IPv4 (IPv6 resets on this host).
-smtp_ip = os.environ.get("MIGADU_SMTP_IPV4", "37.59.57.117").strip() or "37.59.57.117"
+# Default is a current smtp.migadu.com A record — mta1 37.59.57.117 times out from this host.
+smtp_ip = os.environ.get("MIGADU_SMTP_IPV4", "141.94.97.118").strip() or "141.94.97.118"
 add_host = f"--add-host=smtp.migadu.com:{smtp_ip}"
 text = cfg_path.read_text()
 lines = text.splitlines(keepends=True)
@@ -679,7 +680,7 @@ himalaya_test() {
   local app name smtp_ip
   app="$(hermes_app_dir)"
   name="${HERMES_CONTAINER:-hermes}"
-  smtp_ip="${MIGADU_SMTP_IPV4:-37.59.57.117}"
+  smtp_ip="${MIGADU_SMTP_IPV4:-141.94.97.118}"
 
   if ! app_shell "test -x \"\$HERMES_HOME/bin/himalaya\""; then
     echo "himalaya binary missing — run: ./hermes.sh himalaya-install" >&2
