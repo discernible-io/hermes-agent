@@ -43,6 +43,11 @@ _DOCKER_SEARCH_PATHS = [
 _docker_executable: Optional[str] = None  # resolved once, cached
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EGRESS_LABEL_KEY = "hermes-egress"
+# Fingerprint of terminal.docker_extra_args. Host mappings / run flags are
+# immutable after create — without this label, a pin like
+# ``--add-host=smtp.migadu.com:<ip>`` can change in config.yaml while a
+# long-lived sandbox keeps the old ExtraHosts and silently times out.
+_EXTRA_ARGS_LABEL_KEY = "hermes-extra-args"
 
 
 def _normalize_forward_env_names(forward_env: list[str] | None) -> list[str]:
@@ -575,6 +580,20 @@ def _egress_reuse_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
+def _extra_args_reuse_fingerprint(extra_args: list | None) -> str:
+    """Stable Docker-label value for ``terminal.docker_extra_args``.
+
+    Returns ``none`` when empty so containers created before this label
+    existed (no label / empty) are not silently reused after an operator
+    adds host pins or other immutable run flags.
+    """
+    normalized = [a for a in (extra_args or []) if isinstance(a, str) and a]
+    if not normalized:
+        return "none"
+    payload = json.dumps(normalized, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
 def _egress_enforce_on_docker(default: bool = True) -> bool:
     """Read proxy.enforce_on_docker with fail-safe defaulting."""
     try:
@@ -1098,6 +1117,7 @@ class DockerEnvironment(BaseEnvironment):
         egress_label = _egress_reuse_fingerprint(
             egress_volume_args, egress_env_overrides, egress_host_args,
         )
+        extra_args_label = _extra_args_reuse_fingerprint(extra_args)
         _enforce_egress = _egress_enforce_on_docker()
         _critical_egress_names = _critical_egress_env_names(egress_env_overrides)
         if egress_env_overrides:
@@ -1375,6 +1395,7 @@ class DockerEnvironment(BaseEnvironment):
             "--label", f"hermes-task-id={task_label}",
             "--label", f"hermes-profile={profile_name}",
             "--label", f"{_EGRESS_LABEL_KEY}={egress_label}",
+            "--label", f"{_EXTRA_ARGS_LABEL_KEY}={extra_args_label}",
         ]
         # Save args for container recreation on "No such container" recovery.
         self._image = image
@@ -1387,6 +1408,7 @@ class DockerEnvironment(BaseEnvironment):
             "hermes-task-id": task_label,
             "hermes-profile": profile_name,
             _EGRESS_LABEL_KEY: egress_label,
+            _EXTRA_ARGS_LABEL_KEY: extra_args_label,
         }
 
         # Cross-process container reuse (issue #20561 — docs claim "ONE long-lived
@@ -1396,14 +1418,15 @@ class DockerEnvironment(BaseEnvironment):
         # restores the documented contract; opt out via
         # ``terminal.docker_persist_across_processes: false``.
         #
-        # Reuse matches on labels only.  The egress posture gets its own label
-        # because env vars, CA mounts, and host mappings are immutable after
-        # container creation — reusing a pre-egress or pre-rotation container
-        # would silently bypass the credential firewall.
+        # Reuse matches on labels only.  The egress posture and docker_extra_args
+        # each get their own label because env vars, CA mounts, and host
+        # mappings (``--add-host``) are immutable after container creation —
+        # reusing a pre-egress / stale-pin container would silently bypass
+        # the credential firewall or keep a dead SMTP host mapping.
         reused = False
         if persist_across_processes:
             existing = self._find_reusable_container(
-                task_label, profile_name, egress_label,
+                task_label, profile_name, egress_label, extra_args_label,
             )
             if existing is not None:
                 container_id, state = existing
@@ -1663,7 +1686,10 @@ class DockerEnvironment(BaseEnvironment):
         task_label = self._labels.get("hermes-task-id", "")
         profile_label = self._labels.get("hermes-profile", "")
         existing = self._find_reusable_container(
-            task_label, profile_label, self._labels.get(_EGRESS_LABEL_KEY, "off"),
+            task_label,
+            profile_label,
+            self._labels.get(_EGRESS_LABEL_KEY, "off"),
+            self._labels.get(_EXTRA_ARGS_LABEL_KEY, "none"),
         )
         if existing is not None:
             cid, state = existing
@@ -1828,6 +1854,7 @@ class DockerEnvironment(BaseEnvironment):
         task_label: str,
         profile_label: str,
         egress_label: str,
+        extra_args_label: str = "none",
     ) -> Optional[tuple[str, str]]:
         """Look for an existing container labeled for this (task, profile).
 
@@ -1846,6 +1873,11 @@ class DockerEnvironment(BaseEnvironment):
                 "--filter", "label=hermes-agent=1",
                 "--filter", f"label=hermes-task-id={task_label}",
                 "--filter", f"label=hermes-profile={profile_label}",
+                # Always require an exact extra-args fingerprint. Containers
+                # created before this label existed have no value and must
+                # not be reused after docker_extra_args (e.g. SMTP --add-host)
+                # changes — ExtraHosts are immutable for the container lifetime.
+                "--filter", f"label={_EXTRA_ARGS_LABEL_KEY}={extra_args_label}",
             ]
             if egress_label != "off":
                 filters.extend(["--filter", f"label={_EGRESS_LABEL_KEY}={egress_label}"])

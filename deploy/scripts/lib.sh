@@ -438,7 +438,50 @@ if in_term and not wrote_extra:
     out.append(f'    - "{add_host}"\n')
 
 cfg_path.write_text("".join(out))
-print(json.dumps({"ok": True, "docker_volumes": wanted, "docker_extra_args": [add_host]}))
+
+# ExtraHosts are immutable for a container's lifetime. If we changed the
+# Migadu SMTP pin, drop long-lived hermes sandboxes so the next terminal
+# call recreates them with the new --add-host (otherwise SMTP hangs forever
+# on a dead IP while IMAP still works).
+import subprocess
+changed = add_host not in text  # text was pre-rewrite; pin missing or different
+if changed:
+    try:
+        ps = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "label=hermes-agent=1"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        ids = [x for x in ps.stdout.split() if x]
+        removed = []
+        for cid in ids:
+            insp = subprocess.run(
+                ["docker", "inspect", "-f", "{{json .HostConfig.ExtraHosts}}", cid],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            hosts = insp.stdout.strip()
+            # Recreate when ExtraHosts still pin smtp.migadu.com to something else,
+            # or when the desired add-host string is absent.
+            if "smtp.migadu.com" in hosts and smtp_ip not in hosts:
+                subprocess.run(
+                    ["docker", "rm", "-f", cid],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                removed.append(cid[:12])
+        print(json.dumps({
+            "ok": True,
+            "docker_volumes": wanted,
+            "docker_extra_args": [add_host],
+            "sandboxes_recreated_for_smtp_pin": removed,
+        }))
+    except Exception as e:
+        print(json.dumps({
+            "ok": True,
+            "docker_volumes": wanted,
+            "docker_extra_args": [add_host],
+            "sandbox_recreate_error": str(e),
+        }))
+else:
+    print(json.dumps({"ok": True, "docker_volumes": wanted, "docker_extra_args": [add_host]}))
 PY
 }
 
@@ -744,13 +787,14 @@ himalaya_test() {
     return 1
   fi
 
-  echo "Testing Himalaya IMAP via sandbox-equivalent mounts ..."
+  echo "Testing Himalaya IMAP + SMTP (pin ${smtp_ip}) via sandbox-equivalent mounts ..."
   # Run himalaya from the gateway container with sandbox HOME + secrets mounts paths.
   if container_is_running "$name"; then
     podman exec -u hermes \
       -e "HERMES_HOME=${app}" \
       -e "HOME=${app}/sandboxes/docker/default/home" \
       -e "PATH=${app}/bin:/opt/data/bin:/usr/bin:/bin" \
+      -e "MIGADU_SMTP_IPV4=${smtp_ip}" \
       "$name" \
       sh -c '
 set -e
@@ -758,6 +802,32 @@ himalaya --version
 himalaya folder list
 himalaya envelope list --folder INBOX --page-size 5 --output json | head -c 2000
 echo
+# SMTP reachability (the send failure mode: IMAP OK, SMTP hang).
+smtp_ip="${MIGADU_SMTP_IPV4:-141.94.97.118}"
+if timeout 8 sh -c "exec 3<>/dev/tcp/${smtp_ip}/587"; then
+  echo "SMTP ${smtp_ip}:587 reachable"
+else
+  echo "ERROR: SMTP ${smtp_ip}:587 unreachable — sends will hang" >&2
+  exit 1
+fi
+# Stale sandbox ExtraHosts still pinning a dead Migadu IP?
+if command -v docker >/dev/null 2>&1; then
+  stale="$(docker ps -aq --filter label=hermes-agent=1 2>/dev/null || true)"
+  for cid in $stale; do
+    hosts="$(docker inspect -f "{{json .HostConfig.ExtraHosts}}" "$cid" 2>/dev/null || true)"
+    case "$hosts" in
+      *smtp.migadu.com*)
+        case "$hosts" in
+          *"${smtp_ip}"*) ;;
+          *)
+            echo "WARN: sandbox ${cid:0:12} ExtraHosts=$hosts (not pin ${smtp_ip}) — removing" >&2
+            docker rm -f "$cid" >/dev/null 2>&1 || true
+            ;;
+        esac
+        ;;
+    esac
+  done
+fi
 '
   else
     local z
@@ -774,7 +844,7 @@ echo
       -e "PATH=/opt/data/bin:/usr/bin:/bin" \
       --entrypoint sh \
       "${HERMES_IMAGE:-docker.io/nousresearch/hermes-agent:latest}" \
-      -c 'himalaya --version && himalaya folder list && himalaya envelope list --folder INBOX --page-size 5 --output json | head -c 2000; echo'
+      -c 'himalaya --version && himalaya folder list && himalaya envelope list --folder INBOX --page-size 5 --output json | head -c 2000; echo; timeout 8 sh -c "exec 3<>/dev/tcp/'"${smtp_ip}"'/587" && echo SMTP_OK || { echo SMTP_FAIL >&2; exit 1; }'
   fi
 }
 
