@@ -188,6 +188,11 @@ HERMES_EMAIL_DISPLAY_NAME=Hermes Trimegisto
 ./hermes.sh himalaya-password
 ./hermes.sh himalaya-test
 ./hermes.sh start            # refreshes docker_volumes + SMTP IPv4 pin
+
+# If SMTP still times out after a pin change: ExtraHosts are immutable on
+# long-lived sandboxes. himalaya-test / ensure_sandbox_volumes remove
+# hermes-* containers whose smtp.migadu.com pin disagrees with MIGADU_SMTP_IPV4.
+# Or: docker rm -f $(docker ps -aq --filter label=hermes-agent=1)
 ```
 
 Layout under the app volume:

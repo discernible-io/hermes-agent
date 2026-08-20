@@ -1488,3 +1488,28 @@ def test_extra_args_set_shm_size_helper():
     assert docker_env._extra_args_set_shm_size(None) is False
     # non-string entries must not crash (config.yaml can be malformed)
     assert docker_env._extra_args_set_shm_size([42, None, "--shm-size=1g"]) is True
+
+
+def test_extra_args_reuse_fingerprint_changes_with_add_host():
+    """SMTP --add-host pin changes must invalidate container reuse.
+
+    ExtraHosts are immutable after docker run; reusing a sandbox with a
+    dead Migadu pin makes SMTP hang while IMAP still works.
+    """
+    none = docker_env._extra_args_reuse_fingerprint([])
+    assert none == "none"
+    assert docker_env._extra_args_reuse_fingerprint(None) == "none"
+
+    dead = docker_env._extra_args_reuse_fingerprint(
+        ["--add-host=smtp.migadu.com:37.59.57.117"]
+    )
+    live = docker_env._extra_args_reuse_fingerprint(
+        ["--add-host=smtp.migadu.com:141.94.97.118"]
+    )
+    assert dead != "none"
+    assert live != "none"
+    assert dead != live
+    # Stable across calls
+    assert dead == docker_env._extra_args_reuse_fingerprint(
+        ["--add-host=smtp.migadu.com:37.59.57.117"]
+    )

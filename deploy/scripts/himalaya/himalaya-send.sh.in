@@ -8,17 +8,25 @@ BODY="${3:-}"
 
 # Fail fast when SMTP is unreachable (stale --add-host pin, egress block, etc.).
 # Without this, himalaya hangs until the tool/cron timeout (often 90s+).
+# /dev/tcp is bash-only — probe via python (always present in hermes sandboxes).
 SMTP_HOST="${HERMES_SMTP_HOST:-smtp.migadu.com}"
 SMTP_PORT="${HERMES_SMTP_PORT:-587}"
 SMTP_PROBE_SECS="${HERMES_SMTP_PROBE_SECS:-8}"
-if command -v timeout >/dev/null 2>&1; then
-  if ! timeout "$SMTP_PROBE_SECS" sh -c "exec 3<>/dev/tcp/${SMTP_HOST}/${SMTP_PORT}" 2>/dev/null; then
-    echo "ERROR: cannot reach ${SMTP_HOST}:${SMTP_PORT} within ${SMTP_PROBE_SECS}s." >&2
-    echo "Likely causes: stale sandbox --add-host pin, IPv6-only resolve with no v6 route," >&2
-    echo "or egress firewall. Check: getent hosts ${SMTP_HOST}; docker inspect ExtraHosts." >&2
-    echo "Fix: update terminal.docker_extra_args SMTP pin, then recreate hermes-* sandboxes." >&2
-    exit 75
-  fi
+if ! python3 - "$SMTP_HOST" "$SMTP_PORT" "$SMTP_PROBE_SECS" <<'PY'
+import socket, sys
+host, port, secs = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+try:
+    with socket.create_connection((host, port), timeout=secs):
+        pass
+except OSError as e:
+    print(f"ERROR: cannot reach {host}:{port} within {secs:.0f}s ({e})", file=sys.stderr)
+    sys.exit(75)
+PY
+then
+  echo "Likely causes: stale sandbox --add-host pin, IPv6-only resolve with no v6 route," >&2
+  echo "or egress firewall. Check: getent hosts ${SMTP_HOST}; docker inspect ExtraHosts." >&2
+  echo "Fix: update terminal.docker_extra_args SMTP pin, then recreate hermes-* sandboxes." >&2
+  exit 75
 fi
 
 himalaya message send <<MAIL
