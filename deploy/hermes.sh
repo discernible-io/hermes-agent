@@ -35,8 +35,12 @@ usage() {
 }
 
 # Shared hermes gateway run args (caller adds --pod or host -p ports).
+# Secrets come from --env-file $(hermes_app_dir)/.env — never -e KEY=secret.
+# Prefer HERMES_GATEWAY_ENV_FILE_HOST (host-readable staging copy) when set:
+# prepare_app_for_container chowns the app tree to UID 10000 before podman run,
+# which makes the live .env unreadable to the deploy user for --env-file.
 hermes_gateway_run_args() {
-  local app z podman_sock key
+  local app z podman_sock envf
   app="$(hermes_app_dir)"
   z="$(selinux_mount_suffix)"
   local -n _out="$1"
@@ -55,6 +59,16 @@ hermes_gateway_run_args() {
     -e "PATH=${app}/bin:/opt/data/bin:/opt/hermes/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   )
 
+  envf="${HERMES_GATEWAY_ENV_FILE_HOST:-}"
+  if [[ -z "$envf" || ! -f "$envf" ]]; then
+    envf="$(hermes_gateway_env_file)"
+  fi
+  if [[ -f "$envf" ]]; then
+    _out+=(--env-file "$envf")
+  else
+    echo "Warning: missing ${envf} — gateway starts without --env-file secrets" >&2
+  fi
+
   podman_sock="${PODMAN_SOCK:-/run/user/$(id -u)/podman/podman.sock}"
   if [[ -S "$podman_sock" ]]; then
     _out+=(-v "${podman_sock}:/var/run/docker.sock")
@@ -69,24 +83,6 @@ hermes_gateway_run_args() {
   if [[ -n "${HERMES_DASHBOARD:-}" ]]; then
     _out+=(-e "HERMES_DASHBOARD=${HERMES_DASHBOARD}")
   fi
-
-  for key in \
-    OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY NOUS_API_KEY \
-    GOOGLE_API_KEY GEMINI_API_KEY GLM_API_KEY KIMI_API_KEY MINIMAX_API_KEY \
-    API_SERVER_ENABLED API_SERVER_HOST API_SERVER_KEY API_SERVER_CORS_ORIGINS \
-    HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD \
-    HERMES_DASHBOARD_BASIC_AUTH_SECRET HERMES_DASHBOARD_INSECURE \
-    HERMES_DOCKER_BINARY IDENTYCLAW_BASE_URL \
-    WEBHOOK_ENABLED WEBHOOK_PORT WEBHOOK_SECRET \
-    TELEGRAM_BOT_TOKEN TELEGRAM_ALLOWED_USERS TELEGRAM_HOME_CHANNEL \
-    TELEGRAM_HOME_CHANNEL_NAME TELEGRAM_PROXY \
-    TELEGRAM_WEBHOOK_URL TELEGRAM_WEBHOOK_PORT TELEGRAM_WEBHOOK_SECRET \
-    TELEGRAM_WEBHOOK_HOST GATEWAY_ALLOW_ALL_USERS
-  do
-    if [[ -n "${!key:-}" ]]; then
-      _out+=(-e "${key}=${!key}")
-    fi
-  done
 }
 
 cmd_start_standalone() {
@@ -152,6 +148,7 @@ cmd_start_pod() {
 
   nginx_conf="${app}/nginx/nginx.conf"
   echo "Starting nginx sidecar ${HERMES_NGINX_CONTAINER} ..."
+  # All binds under APP_DIR (certs, logs, rendered conf, copied nginx/inc).
   podman run -d \
     --pod "$HERMES_POD" \
     --name "$HERMES_NGINX_CONTAINER" \
@@ -159,7 +156,7 @@ cmd_start_pod() {
     --restart always \
     -v "${app}/certs:/app/certs:ro${z}" \
     -v "${app}/logs/nginx:/var/log/nginx${z}" \
-    -v "${HERMES_ROOT}/nginx/inc:/etc/nginx/inc:ro${z}" \
+    -v "${app}/nginx/inc:/etc/nginx/inc:ro${z}" \
     -v "${nginx_conf}:/etc/nginx/nginx.conf:ro${z}" \
     "$HERMES_NGINX_IMAGE"
 
@@ -176,16 +173,38 @@ cmd_start() {
   ensure_idcp_layout
   load_env
 
+  # Rootless Podman: linger so pods survive SSH/Cursor logout (SKIP_LINGER=1 to skip).
+  bash "${HERMES_ROOT}/scripts/ensure-podman-linger.sh" || true
+
   # Host-owned writes before prepare_app_for_container (which chowns to hermes 10000).
+  # Sync secrets into .env for --env-file; never inject them as -e KEY=value.
+  sync_gateway_env_file || true
+
   if hermes_is_pod_mode; then
     require_pod_webhook_env
     export WEBHOOK_ENABLED=true
     export WEBHOOK_PORT="${WEBHOOK_PORT:-8644}"
+    # Ensure toggles land in .env after pod-mode defaults.
+    sync_gateway_env_file || true
     ensure_webhook_pod_layout
     ensure_tls_certs
     ensure_hermes_nginx_conf
     ensure_webhook_config_seed || true
     normalize_tls_certs
+  fi
+
+  # Stage a host-readable .env copy for podman --env-file (app tree becomes
+  # UID-10000-only after prepare_app_for_container).
+  local staged_env=""
+  staged_env="$(mktemp)"
+  if [[ -r "$(hermes_gateway_env_file)" ]]; then
+    cp "$(hermes_gateway_env_file)" "$staged_env"
+    chmod 600 "$staged_env"
+    export HERMES_GATEWAY_ENV_FILE_HOST="$staged_env"
+  else
+    rm -f "$staged_env"
+    staged_env=""
+    unset HERMES_GATEWAY_ENV_FILE_HOST || true
   fi
 
   prepare_app_for_container
@@ -195,6 +214,9 @@ cmd_start() {
   else
     cmd_start_standalone
   fi
+
+  [[ -n "$staged_env" ]] && rm -f "$staged_env"
+  unset HERMES_GATEWAY_ENV_FILE_HOST || true
 
   # Persist in volume config so rebuilds keep terminal sandboxes usable.
   ensure_egress_defaults

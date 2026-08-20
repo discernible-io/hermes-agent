@@ -19,6 +19,59 @@ hermes_env_file() {
   echo "$(hermes_app_dir)/env.local"
 }
 
+# Hermes-native secrets store (API keys, bot tokens, WEBHOOK_SECRET, …).
+# Gateway starts with --env-file pointing here — never pass secrets as -e KEY=value.
+hermes_gateway_env_file() {
+  echo "$(hermes_app_dir)/.env"
+}
+
+# Keys that belong in .env (secrets + Hermes runtime toggles consumed via getenv).
+# env.local is for host publish ports / deploy mode / non-secret operator prefs.
+_GATEWAY_ENV_KEYS=(
+  OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY NOUS_API_KEY
+  GOOGLE_API_KEY GEMINI_API_KEY GLM_API_KEY KIMI_API_KEY MINIMAX_API_KEY
+  API_SERVER_ENABLED API_SERVER_HOST API_SERVER_KEY API_SERVER_CORS_ORIGINS
+  API_SERVER_MODEL_NAME
+  HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+  HERMES_DASHBOARD_BASIC_AUTH_SECRET HERMES_DASHBOARD_INSECURE
+  IDENTYCLAW_BASE_URL
+  WEBHOOK_ENABLED WEBHOOK_PORT WEBHOOK_SECRET
+  TELEGRAM_BOT_TOKEN TELEGRAM_ALLOWED_USERS TELEGRAM_HOME_CHANNEL
+  TELEGRAM_HOME_CHANNEL_NAME TELEGRAM_PROXY
+  TELEGRAM_WEBHOOK_URL TELEGRAM_WEBHOOK_PORT TELEGRAM_WEBHOOK_SECRET
+  TELEGRAM_WEBHOOK_HOST GATEWAY_ALLOW_ALL_USERS
+)
+
+# Upsert shell-sourced values into .env when the key is missing or empty there.
+# Prefer existing .env values (Hermes setup / hermes config are authoritative).
+# Call while the app dir is host-writable (before prepare_app_for_container).
+# Does not print secret values.
+sync_gateway_env_file() {
+  local envf key val cur
+  load_env
+  envf="$(hermes_gateway_env_file)"
+  mkdir -p "$(dirname "$envf")" 2>/dev/null || true
+  if [[ ! -f "$envf" ]]; then
+    touch "$envf" || {
+      echo "Warning: cannot create ${envf}" >&2
+      return 1
+    }
+  fi
+  chmod 600 "$envf" 2>/dev/null || true
+  for key in "${_GATEWAY_ENV_KEYS[@]}"; do
+    val="${!key:-}"
+    [[ -n "$val" ]] || continue
+    if grep -qE "^${key}=" "$envf" 2>/dev/null; then
+      cur="$(grep -E "^${key}=" "$envf" | head -1 | cut -d= -f2-)"
+      [[ -n "$cur" ]] && continue
+      # shellcheck disable=SC2001
+      sed -i "s|^${key}=.*|${key}=${val}|" "$envf"
+    else
+      printf '%s=%s\n' "$key" "$val" >>"$envf"
+    fi
+  done
+}
+
 selinux_mount_suffix() {
   if [[ "$(uname -s)" == "Linux" ]] && command -v getenforce >/dev/null 2>&1; then
     local mode
@@ -732,13 +785,21 @@ hermes_is_pod_mode() {
 }
 
 require_pod_webhook_env() {
-  local missing=()
+  local missing=() envf
   [[ -n "${HERMES_PUBLIC_HOST:-}" ]] || missing+=("HERMES_PUBLIC_HOST")
   [[ -n "${HERMES_INGRESS_PORT:-}" ]] || missing+=("HERMES_INGRESS_PORT")
-  [[ -n "${WEBHOOK_SECRET:-}" ]] || missing+=("WEBHOOK_SECRET")
+  if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
+    envf="$(hermes_gateway_env_file)"
+    if [[ -r "$envf" ]] && grep -qE '^WEBHOOK_SECRET=.+' "$envf" 2>/dev/null; then
+      :
+    else
+      missing+=("WEBHOOK_SECRET")
+    fi
+  fi
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Pod mode requires: ${missing[*]}" >&2
-    echo "Set them in $(hermes_env_file)" >&2
+    echo "Set HERMES_PUBLIC_HOST / HERMES_INGRESS_PORT in $(hermes_env_file)" >&2
+    echo "Set WEBHOOK_SECRET in $(hermes_gateway_env_file) (secrets store)" >&2
     return 1
   fi
 }
@@ -791,9 +852,39 @@ ensure_hermes_nginx_conf() {
   ensure_webhook_pod_layout
   load_env
   require_pod_webhook_env || return 1
+  prepare_hermes_nginx_host_files || return 1
   app="$(hermes_app_dir)"
   conf="${app}/nginx/nginx.conf"
   bash "${HERMES_ROOT}/scripts/render-nginx-conf.sh" "$conf"
+}
+
+# Copy nginx includes into APP_DIR and keep sidecar binds under the app dir only
+# (never mount the git clone path — same rule as openclaw-agents).
+prepare_hermes_nginx_host_files() {
+  local app
+  app="$(hermes_app_dir)"
+  mkdir -p "${app}/nginx"
+  if [[ -d "${HERMES_ROOT}/nginx/inc" ]]; then
+    mkdir -p "${app}/nginx/inc"
+    cp -a "${HERMES_ROOT}/nginx/inc/." "${app}/nginx/inc/"
+  fi
+  [[ -d "${app}/nginx/inc" ]] || {
+    echo "missing ${app}/nginx/inc — expected copy from ${HERMES_ROOT}/nginx/inc" >&2
+    return 1
+  }
+}
+
+# Host bind sources for the nginx sidecar. All paths under APP_DIR.
+# Prints "host_src:container_dst" (no SELinux suffix).
+hermes_pod_nginx_bind_specs() {
+  local app="${1:-$(hermes_app_dir)}"
+  printf '%s\n' \
+    "${app}/certs:/app/certs" \
+    "${app}/logs/nginx:/var/log/nginx"
+  if [[ -d "${app}/nginx/inc" ]]; then
+    printf '%s\n' "${app}/nginx/inc:/etc/nginx/inc"
+  fi
+  printf '%s\n' "${app}/nginx/nginx.conf:/etc/nginx/nginx.conf"
 }
 
 ensure_pod_logs_for_container() {
@@ -816,7 +907,9 @@ build_hermes_nginx_image() {
     "${HERMES_ROOT}"
 }
 
-# Seed platforms.webhook in config.yaml when missing (no routes — operator adds them).
+# Seed platforms.webhook in config.yaml when missing (structure only — never
+# write WEBHOOK_SECRET into config; that lives in .env via --env-file).
+# Also strips a previously seeded secret key from platforms.webhook if present.
 ensure_webhook_config_seed() {
   local app cfg
   app="$(hermes_app_dir)"
@@ -824,26 +917,74 @@ ensure_webhook_config_seed() {
   [[ -f "$cfg" ]] || return 0
   load_env
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 - "$cfg" "${WEBHOOK_PORT:-8644}" "${WEBHOOK_SECRET:-}" <<'PY'
-import pathlib, sys
-cfg_path, port, secret = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+  python3 - "$cfg" "${WEBHOOK_PORT:-8644}" <<'PY'
+import pathlib, re, sys
+
+cfg_path, port = pathlib.Path(sys.argv[1]), sys.argv[2]
 text = cfg_path.read_text()
-if "platforms:" in text and "webhook:" in text:
-    print("config.yaml already has platforms.webhook")
+lines = text.splitlines(keepends=True)
+out: list[str] = []
+changed = False
+
+# Track nesting: platforms: → webhook: → (optional) extra:
+in_platforms = False
+in_webhook = False
+platforms_indent = -1
+webhook_indent = -1
+
+for line in lines:
+    raw = line.rstrip("\n")
+    stripped = raw.lstrip(" ")
+    indent = len(raw) - len(stripped) if stripped else 0
+
+    if re.match(r"^platforms:\s*(#.*)?$", raw):
+        in_platforms = True
+        platforms_indent = indent
+        in_webhook = False
+        out.append(line)
+        continue
+
+    if in_platforms and stripped and indent <= platforms_indent and not stripped.startswith("#"):
+        in_platforms = False
+        in_webhook = False
+
+    if in_platforms and re.match(r"^webhook:\s*(#.*)?$", stripped):
+        in_webhook = True
+        webhook_indent = indent
+        out.append(line)
+        continue
+
+    if in_webhook:
+        if stripped and indent <= webhook_indent and not stripped.startswith("#"):
+            in_webhook = False
+        elif re.match(r"^secret:\s*", stripped):
+            changed = True
+            continue
+
+    out.append(line)
+
+text = "".join(out)
+if changed:
+    cfg_path.write_text(text if text.endswith("\n") else text + "\n")
+    print("Removed platforms.webhook secret from config.yaml (use .env WEBHOOK_SECRET)")
+
+if "platforms:" in text and re.search(r"(?m)^\s*webhook:\s*$", text):
+    if not changed:
+        print("config.yaml already has platforms.webhook")
     raise SystemExit(0)
+
 block = f"""
-# hermes.sh pod webhook seed (managed)
+# hermes.sh pod webhook seed (managed) — secret lives in .env (WEBHOOK_SECRET)
 platforms:
   webhook:
     enabled: true
     extra:
       host: "0.0.0.0"
       port: {port}
-      secret: {secret!r}
       routes: {{}}
 """
 cfg_path.write_text(text.rstrip() + "\n" + block)
-print(f"Appended platforms.webhook seed to {cfg_path}")
+print(f"Appended platforms.webhook seed (no secret) to {cfg_path}")
 PY
 }
 

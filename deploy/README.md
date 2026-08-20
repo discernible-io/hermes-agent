@@ -16,6 +16,23 @@ can sync this checkout without carrying runtime state.
 
 Override the app root with `HERMES_APP_DIR=/custom/path`.
 
+## Secret and layout map
+
+One store per concern (aligned with discernible-io/docs configuration + CI/CD standards):
+
+| Store | Path | Holds | How gateway sees it |
+|-------|------|-------|---------------------|
+| **Non-secrets** | `~/hermes-agent-app/env.local` | Ports, `HERMES_DEPLOY_MODE`, `HERMES_PUBLIC_HOST`, email display prefs | Sourced by `hermes.sh` on the host only |
+| **Secrets** | `~/hermes-agent-app/.env` | API keys, `TELEGRAM_*`, `WEBHOOK_SECRET`, auth tokens | `podman run --env-file …/.env` (never `-e KEY=secret`) |
+| **File secrets** | `~/hermes-agent-app/secrets/` | Himalaya pass helpers, NEAR/IdentyClaw creds | Bind-mounted under `/opt/data/secrets` |
+| **Config** | `~/hermes-agent-app/config.yaml` | Non-secret Hermes settings; webhook host/port/routes only | Mounted as HERMES_HOME — **no secrets** |
+| **TLS** | `~/hermes-agent-app/certs/` | `fullchain.pem` / `privkey.pem` (LE or self-signed) | nginx sidecar `ro` mount; UID 101 via `podman unshare` |
+| **Nginx** | `~/hermes-agent-app/nginx/` | Rendered `nginx.conf` + copied `inc/` | All sidecar binds under APP_DIR (not the git clone) |
+
+`./hermes.sh start` syncs any secret keys still present in `env.local` into `.env` when missing there, then starts with `--env-file`. Prefer editing `.env` directly for new secrets. `WEBHOOK_SECRET` must not appear in `config.yaml`.
+
+Rootless Podman linger is enabled on every start (`scripts/ensure-podman-linger.sh`; set `SKIP_LINGER=1` to skip).
+
 ## Quick start
 
 ```bash
@@ -65,7 +82,7 @@ This wrapper can expose it behind an **nginx TLS sidecar** in a dedicated Podman
 | `HERMES_DEPLOY_MODE=standalone` (default) | Single gateway container; API on `HERMES_API_PORT`; no public webhooks |
 | `HERMES_DEPLOY_MODE=pod` | Pod `hermes-agent-pod`: `hermes` + `hermes-nginx`; HTTPS ingress; webhooks forced on |
 
-Auth is Hermes **HMAC** (not IdentyClaw RODiT). nginx only terminates TLS and proxies `/webhooks/`.
+Auth is Hermes **HMAC** via `WEBHOOK_SECRET` in `.env` (not IdentyClaw RODiT; not `config.yaml`). nginx only terminates TLS and proxies `/webhooks/`.
 
 Host publish: Telegram webhook on **8443** (Telegram Bot API only accepts inbound webhooks on 443, 80, 88, or 8443). Operator API stays on 11642. Override `HERMES_TELEGRAM_PORT` / `HERMES_INGRESS_PORT` in `env.local` when 8443 is already taken on the host.
 
@@ -76,23 +93,28 @@ Host publish: Telegram webhook on **8443** (Telegram Bot API only accepts inboun
 | `11919` | container `9119` | Dashboard (optional) |
 
 ```bash
-# in hermes-agent-app/env.local
+# in hermes-agent-app/env.local (non-secrets)
 HERMES_DEPLOY_MODE=pod
 HERMES_PUBLIC_HOST=hermes.example.com
 HERMES_INGRESS_PORT=8443
 HERMES_API_PORT=11642
-TELEGRAM_WEBHOOK_URL=https://hermes.example.com:8443/telegram
-TELEGRAM_WEBHOOK_SECRET=long-random-secret
-WEBHOOK_SECRET=long-random-secret
 
-./hermes.sh generate-certs
+# in hermes-agent-app/.env (secrets — --env-file)
+WEBHOOK_SECRET=$(openssl rand -hex 32)
+WEBHOOK_ENABLED=true
+WEBHOOK_PORT=8644
+TELEGRAM_WEBHOOK_URL=https://hermes.example.com:8443/telegram
+TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)
+
+./hermes.sh generate-certs   # or install LE PEMs into certs/
 ./hermes.sh build-nginx
 ./hermes.sh start
 curl -k "https://${HERMES_PUBLIC_HOST}:${HERMES_INGRESS_PORT}/health"
 # Point GitHub/etc at https://hermes.example.com:8443/webhooks/<route>
-# Telegram: TELEGRAM_WEBHOOK_URL=https://hermes.example.com:8443/telegram
 # Manage routes: ./hermes.sh exec -- hermes webhook subscribe …
 ```
+
+Auth is Hermes **HMAC** via `WEBHOOK_SECRET` in `.env` (not IdentyClaw RODiT; not `config.yaml`). nginx only terminates TLS and proxies `/webhooks/`.
 
 Layout under the app volume (pod mode):
 
@@ -100,6 +122,7 @@ Layout under the app volume (pod mode):
 |------|------|
 | `certs/` | `fullchain.pem` + `privkey.pem` |
 | `nginx/nginx.conf` | Rendered from env (host + ingress port) |
+| `nginx/inc/` | Copied from `deploy/nginx/inc` on start (APP_DIR bind only) |
 | `logs/nginx/` | Sidecar access/error logs |
 
 Operator API remains on `http://127.0.0.1:${HERMES_API_PORT}` (not on the public hostname).
