@@ -71,3 +71,10 @@ idcp create_hola --recipient MUNDO
 idcp request GET /api/agents
 idcp request GET /api/identity/token/<peerTokenId>/full
 ```
+
+Federated peers (no API key — remint a JWT for that host):
+
+```bash
+idcp ensure_session --base https://api.lastcradle.io
+idcp request GET /api/token/claims --base https://api.lastcradle.io
+```

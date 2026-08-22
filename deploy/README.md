@@ -147,6 +147,15 @@ Host-login path (portable brief — not OpenClaw plugins). Secrets stay in the *
 ./hermes.sh start                       # recreates gateway with /opt/idcp mount
 ```
 
+Home JWT is **not** accepted on federated peers. Remint per `apiEndpoint` (no API key):
+
+```bash
+./hermes.sh idcp ensure_session --base https://api.lastcradle.io
+./hermes.sh idcp request GET /api/token/claims --base https://api.lastcradle.io
+```
+
+Peer template: [discernible-io/api-idc](https://github.com/discernible-io/api-idc). Full enrollment + federation walkthrough: [README.md](../README.md#identyclaw-passport-discernible).
+
 Agent ops (also available as `idcp` inside the container):
 
 - `ensure_session` / `list_sessions` / `me`

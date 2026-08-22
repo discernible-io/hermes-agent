@@ -4,10 +4,36 @@
 
 # Hermes Agent ☤
 
-> **Discernible fork:** Podman + IdentyClaw Passport operator scripts live in
-> [`deploy/`](./deploy/README.md). Runtime state stays in the sibling
-> `~/hermes-agent-app/` directory (`./deploy/hermes.sh init`).
-> Passport enrollment steps are below — see also [discernible.io](https://www.discernible.io/).
+**This is [Discernible](https://www.discernible.io/)'s fork of
+[Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent).**
+Upstream remains the agent runtime (CLI, gateway, TUI, skills, learning loop).
+This checkout adds a rootless **Podman** operator and **IdentyClaw Passport**
+identity so the agent can onboard at
+[api.identyclaw.com](https://api.identyclaw.com) and then log in to **any
+federated peer API** built from
+[discernible-io/api-idc](https://github.com/discernible-io/api-idc) — for
+example [api.lastcradle.io](https://api.lastcradle.io) — **with no API key and
+no extra credentials**. The Passport *is* the credential.
+
+| | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) (upstream) | This fork ([discernible-io/hermes-agent](https://github.com/discernible-io/hermes-agent)) |
+|---|---|---|
+| Runtime image | `nousresearch/hermes-agent` | Same image — we do not fork Hermes core |
+| Host install | `install.sh` / Docker / desktop | Rootless **Podman** via [`deploy/hermes.sh`](./deploy/README.md) |
+| Runtime state | `~/.hermes/` | Sibling `~/hermes-agent-app/` (`./deploy/hermes.sh init`) |
+| Agent identity | Not included | IdentyClaw Passport + `idcp` (enroll, JWT session, HOLA) |
+| Calling peer APIs | Vendor API keys in `.env` | Prove Passport key possession; peer mints a JWT. No API keys. |
+| Email / TLS ingress | Bring your own | Himalaya + optional nginx sidecar |
+
+Operator reference: [`deploy/README.md`](./deploy/README.md). Product overview:
+[discernible.io](https://www.discernible.io/). Enrollment contract:
+[guide:enrollment](https://api.identyclaw.com/.well-known/enrollment). Purchase:
+[purchase.identyclaw.com](https://purchase.identyclaw.com).
+
+If you only want stock Hermes, use
+[upstream](https://github.com/NousResearch/hermes-agent). The rest of this
+README still describes the Nous agent; skip to
+[IdentyClaw Passport](#identyclaw-passport-discernible) for the fork-specific
+path.
 
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
@@ -40,9 +66,33 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), OpenR
 
 ## IdentyClaw Passport (Discernible)
 
-This fork wires Hermes to [IdentyClaw](https://www.discernible.io/) — portable, cryptographically verifiable agent identity on NEAR (RODiT / HOLA). You mint a Passport once; peers resolve you by a stable 12-letter `tokenId` across hosts and redeploys. Overview and Hermes path: [discernible.io](https://www.discernible.io/) · enrollment API: [guide:enrollment](https://api.identyclaw.com/.well-known/enrollment) · purchase: [purchase.identyclaw.com](https://purchase.identyclaw.com).
+This fork wires Hermes to [IdentyClaw](https://www.discernible.io/) — portable, cryptographically verifiable agent identity on NEAR (RODiT / HOLA).
 
-Checkout is a **human** step. Keep NEAR private keys on disk only — never paste them into chat.
+You mint a Passport **once** at IdentyClaw home. Peers resolve you by a stable 12-letter `tokenId` across hosts and redeploys. The same Passport then logs the agent into **any federated peer** that implements the IdentyClaw login contract — without creating an account there, without an API key, and without extra credentials.
+
+| Role | Host | What it does |
+|------|------|----------------|
+| **Home** | [api.identyclaw.com](https://api.identyclaw.com) | Issues Passport / HOLA identity. Does **not** authorize third-party APIs. |
+| **Peer** | e.g. [api.lastcradle.io](https://api.lastcradle.io), or any API from [api-idc](https://github.com/discernible-io/api-idc) | Same login challenge (`GET /api/login/timestamp` → `POST /api/login`). Mints a JWT valid **only** for that peer. |
+
+Clients remint a JWT **per peer**. A home JWT is not accepted at lastcradle (or any other peer), and peer tokens are not portable across peers. `idcp` caches each host’s JWT under `~/hermes-agent-app/secrets/identyclaw/` and never prints it to the model.
+
+```text
+┌─────────────────────┐         ┌──────────────────────────┐
+│ IdentyClaw home     │         │ Federated peer           │
+│ api.identyclaw.com  │         │ e.g. api.lastcradle.io   │
+│ mint Passport once  │         │ POST /api/login → JWT    │
+└─────────┬───────────┘         └────────────┬─────────────┘
+          │ Passport keys                    │
+          └──────────────┬───────────────────┘
+                         ▼
+              idcp ensure_session --base <peer>
+              (prove key possession; no API key)
+```
+
+Checkout is a **human** step. Keep NEAR private keys on disk only — never paste them into chat. LLM providers (OpenRouter, Nous Portal, …) are a separate concern; Passport replaces **service API keys** for federated peers, not model keys.
+
+Enrollment contract: [guide:enrollment](https://api.identyclaw.com/.well-known/enrollment) · purchase: [purchase.identyclaw.com](https://purchase.identyclaw.com).
 
 ### 1. Install this repo (Podman)
 
@@ -96,15 +146,19 @@ You can also fund or swap via other NEAR wallets / DEX (e.g. Ref Finance). What 
 
 Pricing tiers and fields change over time; trust the portal for current fees.
 
-### 5. Activate on Hermes
+### 5. Activate on Hermes (home session)
+
+This logs into **IdentyClaw home** (`https://api.identyclaw.com`) — identity, HOLA, discovery. It does not log you into other APIs.
 
 ```bash
-./hermes.sh idcp ensure_session   # JWT login (cached under secrets/identyclaw/)
+./hermes.sh idcp ensure_session   # JWT login against home (cached under secrets/identyclaw/)
 ./hermes.sh idcp me               # confirm Passport identity / tokenId
 ./hermes.sh start                 # recreate gateway with /opt/idcp mount if needed
 ```
 
-Day-to-day: `idcp create_hola` / `idcp verify_hola` / `idcp request …`. Optional docs MCP:
+`ensure_session` signs the peer’s login challenge with the Passport Ed25519 key (`GET /api/login/timestamp` → `POST /api/login`). No password, no API key, no extra account.
+
+Day-to-day on home: `idcp create_hola` / `idcp verify_hola` / `idcp request …`. Optional docs MCP:
 
 ```bash
 ./hermes.sh exec -- hermes mcp add IdentyClawDocs --url https://api.identyclaw.com/mcp
@@ -114,12 +168,54 @@ Day-to-day: `idcp create_hola` / `idcp verify_hola` / `idcp request …`. Option
 |------|------|
 | `~/hermes-agent/deploy/` | Podman scripts + `idcp/` |
 | `~/hermes-agent-app/secrets/near-credentials/` | NEAR key JSON |
-| `~/hermes-agent-app/secrets/identyclaw/` | JWT cache |
+| `~/hermes-agent-app/secrets/identyclaw/` | JWT cache **per API host** |
 | `~/hermes-agent-app/skills/identity/identyclaw/` | Agent skill |
+
+### 6. Log in to any federated peer (no API key)
+
+After the Passport exists, the same keypair logs into every peer that ships the IdentyClaw challenge-response contract. Point `idcp` at that peer’s `apiEndpoint` with `--base`. The helper remints a JWT **for that host only** and injects `Authorization: Bearer` on `request`. You do not register, you do not collect a vendor key, and you must not send the home JWT to the peer.
+
+Auth contract (same on home and every peer):
+
+| Step | Endpoint | Notes |
+|------|----------|--------|
+| 1 | `GET /api/login/timestamp` | Fresh timestamp from **this** peer |
+| 2 | Sign locally | UTF-8 `accountid + timestamp_iso` (Ed25519 → base64url) |
+| 3 | `POST /api/login` | Signature → peer-minted `jwt_token` |
+| 4 | Protected calls | `Authorization: Bearer <jwt_token>` |
+
+`idcp` does those four steps for you.
+
+#### Example: Synthetics' Last Cradle
+
+[api.lastcradle.io](https://api.lastcradle.io) is a live federated peer (game + sample CRUDA). A home JWT does **not** authorize `/api/game/*` there — remint against lastcradle:
+
+```bash
+PEER=https://api.lastcradle.io
+./hermes.sh idcp ensure_session --base "$PEER"
+./hermes.sh idcp me --base "$PEER"
+./hermes.sh idcp request GET /api/token/claims --base "$PEER"
+./hermes.sh idcp list_sessions    # home + lastcradle, metadata only (no JWTs)
+```
+
+Public playbook (no JWT): [skill.md](https://api.lastcradle.io/api/game/skill.md) · [peer-auth.md](https://api.lastcradle.io/api/game/peer-auth.md) · [OpenAPI](https://api.lastcradle.io/api-docs).
+
+#### Run your own peer
+
+Fork or clone **[discernible-io/api-idc](https://github.com/discernible-io/api-idc)** — keep the login spine (`authenticate` / `authorize`), replace the sample CRUDA resource with your domain, set `SERVICE_NAME` and OpenAPI `servers` to your hostname. Passport holders then log in the same way:
+
+```bash
+./hermes.sh idcp ensure_session --base https://your-peer.example
+./hermes.sh idcp request GET /api/token/claims --base https://your-peer.example
+```
+
+Tell clients: login against **your** `apiEndpoint`; never send a home JWT there.
 
 ---
 
 ## Quick Install
+
+> **This fork:** prefer the Podman path in [step 1](#1-install-this-repo-podman) (`./deploy/hermes.sh`), not the upstream one-liner below. The curl/PowerShell installers are stock [Nous Hermes](https://github.com/NousResearch/hermes-agent) and do **not** include `idcp`, Passport, or the sibling `hermes-agent-app/` layout.
 
 ### Linux, macOS, WSL2, Termux
 
@@ -206,6 +302,8 @@ hermes doctor       # Diagnose any issues
 
 📖 **[Full documentation →](https://hermes-agent.nousresearch.com/docs/)**
 
+On this fork, prefer `./hermes.sh chat` and `./hermes.sh exec -- hermes …` against `~/hermes-agent-app/`. Do not run `hermes update` inside the container — use `./hermes.sh pull && ./hermes.sh start`.
+
 ---
 
 ## Skip the API-key collection — Nous Portal
@@ -224,6 +322,8 @@ hermes setup --portal
 That logs you in via OAuth, sets Nous as your provider, and turns on the Tool Gateway. Check what's wired up any time with `hermes portal info`. Full details on the [Tool Gateway docs page](https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-gateway).
 
 You can still bring your own keys per-tool whenever you want — the gateway is per-backend, not all-or-nothing.
+
+This is **model and tool-gateway** billing. It is not how federated service APIs authenticate. IdentyClaw Passport holders log into peers such as [api.lastcradle.io](https://api.lastcradle.io) with `idcp ensure_session --base …` — no Nous Portal key and no vendor API key. See [step 6](#6-log-in-to-any-federated-peer-no-api-key).
 
 ---
 
@@ -336,6 +436,16 @@ scripts/run_tests.sh
 
 ## Community
 
+**This fork**
+
+- 🌐 [discernible.io](https://www.discernible.io/)
+- 🪪 [IdentyClaw home](https://api.identyclaw.com) · [purchase](https://purchase.identyclaw.com)
+- 🧩 Federated peer template: [discernible-io/api-idc](https://github.com/discernible-io/api-idc)
+- 🎮 Example peer: [api.lastcradle.io](https://api.lastcradle.io)
+- 🐛 Fork issues: [discernible-io/hermes-agent](https://github.com/discernible-io/hermes-agent/issues)
+
+**Upstream Hermes**
+
 - 💬 [Discord](https://discord.gg/NousResearch)
 - 📚 [Skills Hub](https://agentskills.io)
 - 🐛 [Issues](https://github.com/NousResearch/hermes-agent/issues)
@@ -348,4 +458,4 @@ scripts/run_tests.sh
 
 MIT — see [LICENSE](LICENSE).
 
-Built by [Nous Research](https://nousresearch.com).
+Hermes Agent is built by [Nous Research](https://nousresearch.com). This fork’s Podman operator and IdentyClaw Passport path are maintained by [Discernible](https://www.discernible.io/).
